@@ -1,0 +1,106 @@
+#!/bin/bash
+echo "Execute the script in Gen6 Bastion"
+echo "Make sure that the SSH connection is established between gen6 and gen8 bastion"
+echo "This script copies the jenkins file from gen6 to gen8 server"
+# Remove the files if already exists
+#rm -rf jenkinspodname d_name executegen8jenkins.sh $directory jenkins6cksum
+
+# Set the necessary environment variables
+read -p "Enter the gen6 Bastion public IP : " gen6ip
+read -p "Enter the gen8 Bastion public IP : " gen8ip
+echo $gen6ip > ~/gen6ip
+echo $gen8ip > ~/gen8ip
+jenkinsname=$(ssh ubuntu@$gen8ip "kubectl get pods -n ethan --field-selector=status.phase=Running -l app=jenkins | grep -v NAME | cut -d ' ' -f1")
+
+jenkins6pod=$(kubectl get pods -n ethan --field-selector=status.phase=Running -l app=jenkins-blueocean | grep -v NAME | cut -d ' ' -f1)
+
+echo "The list of Jenkins jobs available from gen6"
+echo "--------------------------------------------"
+
+kubectl exec $jenkins6pod -- ls /var/jenkins_home/jobs/ | awk '{print $1}'
+read -p "Enter job to be taken as backup : " directory
+
+#Creating the directory
+echo $directory > ~/d_name
+echo $jenkinsname > ~/jenkinspodname
+
+
+#Copying the the job form pod to bastion
+
+kubectl exec -it $jenkins6pod -- /bin/bash -c "cp -r /var/jenkins_home/jobs/$directory /tmp"
+
+echo "creating the tar file of directory"
+kubectl exec -it $jenkins6pod -- /bin/bash -c "tar -cvf /tmp/$directory.tar /tmp/$directory"
+
+echo "Display the checksum value of directory"
+jenkins6cksum=$(kubectl exec -it $jenkins6pod -- /bin/bash -c "cksum  /tmp/$directory.tar" | awk '{print $2}')
+
+echo "copying the jenkins6cksum value to gen8"
+echo $jenkins6cksum > ~/jenkins6cksum
+dos2unix ~/jenkins6cksum
+chmod 775 ~/jenkins6cksum
+scp -r ~/jenkins6cksum ubuntu@$gen8ip:/home/ubuntu/
+
+echo "copying the tar file from pod to bastion"
+kubectl cp $jenkins6pod:/tmp/$directory.tar ~/$directory.tar/
+
+echo "checking the checksum values in bastion"
+cksum ~/$directory.tar | awk '{print $2}' >> ~/jenkins6cksumin
+
+if [ "$(cat ~/jenkins6cksum)" = "$(cat ~/jenkins6cksumin)" ]; then
+echo "The contents of jenkins6cksum and jenkins6cksumin are equal"
+else
+echo "checksum value is not matched exiting the script"
+exit 1
+fi
+
+#### Copying the jenkins file from Gen6 to gen8 bastion ####
+
+scp -r $directory.tar/ ubuntu@$gen8ip:/home/ubuntu/
+
+echo "File transfer successful source to destination"
+
+echo "dynmaically creating the script to execute destionation"
+
+cat << EOF >> ~/executegen8jenkins.sh
+    cd $HOME
+    directory=`cat ~/d_name`
+
+    echo "Copy the directory.tar bastion to pod"
+    echo "$directory"
+    kubectl cp $directory.tar/ $jenkinsname:/tmp
+
+    echo "Display the checksum value of directory.tar"
+    kubectl exec -it $jenkinsname -- /bin/bash -c "cksum  /tmp/$directory.tar" | cut -d " " -f2 | tr -d \r > ~/jenkins8cksum
+    dos2unix ~/jenkins8cksum
+    chmod 775 ~/jenkins8cksum
+    scp -r ~/jenkins8cksum ubuntu@$gen6ip:/home/ubuntu/
+
+
+    echo "checking the checksum values equal or not"
+    if [ "$(/home/ubuntu/jenkins6cksum)" = "$(/home/ubuntu/jenkins8cksum)" ]; then
+    echo "The contents of jenkins6cksum and jenkins8cksum are equal"
+
+    echo "Extracting the tar file"
+    kubectl exec -it $jenkinsname -- /bin/bash -c "cd /tmp && tar -xvf /tmp/$directory.tar"
+    echo "Copying the directory to jobs folder"
+    kubectl exec -it $jenkinsname -- /bin/bash -c "cp -r /tmp/tmp/$directory /var/jenkins_home/jobs/"
+
+    else
+    echo " checksum value is not matched exiting the script"
+    exit 1
+    fi
+
+EOF
+
+chmod 775 ~/executegen8jenkins.sh
+
+scp -r ~/executegen8jenkins.sh ubuntu@$gen8ip:/home/ubuntu/
+echo "validating the script"
+ssh -t ubuntu@$gen8ip -- sh ~/executegen8jenkins.sh
+#ssh -t ubuntu@$gen8ip -- rm -rf ~/executegen8jenkins.sh $directory nexus6cksum nexus7cksum
+
+#Remove files once files is after successfully copied
+#rm -rf jenkinspodname d_name executegen8jenkins.sh $directory jenkins6cksum
+
+echo "The script has been executed successfully"
