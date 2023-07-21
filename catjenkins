@@ -67,15 +67,18 @@ cat << EOF >> ~/executegen8jenkins.sh
     directory=`cat ~/d_name`
 
     echo "Copy the directory.tar bastion to pod"
-    echo "$directory"
+    echo "\$directory"
     kubectl cp $directory.tar/ $jenkinsname:/tmp
 
     echo "Display the checksum value of directory.tar"
     kubectl exec -it $jenkinsname -- /bin/bash -c "cksum  /tmp/$directory.tar" | cut -d " " -f2 | tr -d \r > ~/jenkins8cksum
+    # Below variable will be initialize in executegen8jenkins.sh 
+    jenk8cksum=$(cat jenkins8cksum)
+    # echo will be evaluated on destination server, So when you execute executegen8jenkins.sh value will be printed
+    echo "\${jenk8cksum}"
     dos2unix ~/jenkins8cksum
     chmod 775 ~/jenkins8cksum
     scp -r ~/jenkins8cksum ubuntu@$gen6ip:/home/ubuntu/
-
 
     echo "checking the checksum values equal or not"
     if [ "$(/home/ubuntu/jenkins6cksum)" = "$(/home/ubuntu/jenkins8cksum)" ]; then
